@@ -38,9 +38,9 @@
 extern "C"
 {
 #include "../twcommon.h"
-#include "../minuitwrp/minui.h"
 #include <pixelflinger/pixelflinger.h>
 }
+#include "../minuitwrp/minui.h"
 
 #include "rapidxml.hpp"
 #include "objects.hpp"
@@ -528,13 +528,19 @@ static void ors_command_read()
 			fprintf(orsout, "%s", result);
 			LOGINFO("Command cannot be performed, operation in progress.\n");
 		} else {
-			if (gui_console_only() == 0) {
+			if (strlen(command) == 11 && strncmp(command, "dumpstrings", 11) == 0) {
+				// This cannot be done safely with gui_console_only because gui_console_only updates mCurrentSet
+				// which makes the resources that we are trying to read unreachable.
+				gui_set_FILE(orsout);
+				PageManager::GetResources()->DumpStrings();
+				gui_set_FILE(NULL);
+			} else if (gui_console_only() == 0) {
 				LOGINFO("Console started successfully\n");
 				gui_set_FILE(orsout);
 				if (strlen(command) > 11 && strncmp(command, "runscript", 9) == 0) {
 					char* filename = command + 11;
 					if (OpenRecoveryScript::copy_script_file(filename) == 0) {
-						LOGERR("Unable to copy script file\n");
+						LOGINFO("Unable to copy script file\n");
 					} else {
 						OpenRecoveryScript::run_script_file();
 					}
@@ -545,7 +551,7 @@ static void ors_command_read()
 					gui_print("%s = %s\n", varname, temp.c_str());
 				} else if (strlen(command) > 9 && strncmp(command, "decrypt", 7) == 0) {
 					char* pass = command + 8;
-					gui_print("Attempting to decrypt data partition via command line.\n");
+					gui_msg("decrypt_cmd=Attempting to decrypt data partition via command line.");
 					if (PartitionManager.Decrypt_Device(pass) == 0) {
 						set_page_done = 1;
 					}
@@ -678,6 +684,8 @@ static int runPages(const char *page_name, const int stop_on_page_done)
 			int ret = PageManager::Update();
 			if (ret == 0)
 				++idle_frames;
+			else if (ret == -2)
+				break; // Theme reload failure
 			else
 				idle_frames = 0;
 			// due to possible animation objects, we need to delay activating the input timeout
@@ -772,15 +780,39 @@ std::string gui_parse_text(std::string str)
 {
 	// This function parses text for DataManager values encompassed by %value% in the XML
 	// and string resources (%@resource_name%)
-	size_t pos = 0;
+	size_t pos = 0, next, end;
 
 	while (1)
 	{
-		size_t next = str.find('%', pos);
+		next = str.find("{@", pos);
+		if (next == std::string::npos)
+			break;
+
+		end = str.find('}', next + 1);
+		if (end == std::string::npos)
+			break;
+
+		std::string var = str.substr(next + 2, (end - next) - 2);
+		str.erase(next, (end - next) + 1);
+
+		size_t default_loc = var.find('=', 0);
+		std::string lookup;
+		if (default_loc == std::string::npos) {
+			str.insert(next, PageManager::GetResources()->FindString(var));
+		} else {
+			lookup = var.substr(0, default_loc);
+			std::string default_string = var.substr(default_loc + 1, var.size() - default_loc - 1);
+			str.insert(next, PageManager::GetResources()->FindString(lookup, default_string));
+		}
+	}
+	pos = 0;
+	while (1)
+	{
+		next = str.find('%', pos);
 		if (next == std::string::npos)
 			return str;
 
-		size_t end = str.find('%', next + 1);
+		end = str.find('%', next + 1);
 		if (end == std::string::npos)
 			return str;
 
@@ -806,6 +838,10 @@ std::string gui_parse_text(std::string str)
 	}
 }
 
+std::string gui_lookup(const std::string& resource_name, const std::string& default_value) {
+	return PageManager::GetResources()->FindString(resource_name, default_value);
+}
+
 extern "C" int gui_init(void)
 {
 	gr_init();
@@ -817,7 +853,7 @@ extern "C" int gui_init(void)
 		printf("Unable to locate '%s'\nDid you set a TW_THEME in your config files?\n", curtain_path.c_str());
 		return -1;
 	}
-	if (gr_get_width(source_Surface) != gr_fb_width() || gr_get_height(source_Surface) != gr_fb_height()) {
+	if (gr_get_width(source_Surface) != (unsigned)gr_fb_width() || gr_get_height(source_Surface) != (unsigned)gr_fb_height()) {
 		// We need to scale the curtain to fit the screen
 		float scale_w = (float)gr_fb_width() / (float)gr_get_width(source_Surface);
 		float scale_h = (float)gr_fb_height() / (float)gr_get_height(source_Surface);
@@ -839,9 +875,55 @@ extern "C" int gui_init(void)
 
 extern "C" int gui_loadResources(void)
 {
-	if(!TWFunc::loadTheme())
-		goto error;
+#ifndef TW_OEM_BUILD
+	int check = 0;
+	DataManager::GetValue(TW_IS_ENCRYPTED, check);
 
+	if (check)
+	{
+		if (PageManager::LoadPackage("TWRP", TWRES "ui.xml", "decrypt"))
+		{
+			gui_err("base_pkg_err=Failed to load base packages.");
+			goto error;
+		}
+		else
+			check = 1;
+	}
+
+	if (check == 0 && PageManager::LoadPackage("TWRP", "/script/ui.xml", "main"))
+	{
+		std::string theme_path;
+
+		theme_path = DataManager::GetSettingsStoragePath();
+		if (!PartitionManager.Mount_Settings_Storage(false))
+		{
+			int retry_count = 5;
+			while (retry_count > 0 && !PartitionManager.Mount_Settings_Storage(false))
+			{
+				usleep(500000);
+				retry_count--;
+			}
+
+			if (!PartitionManager.Mount_Settings_Storage(true))
+			{
+				LOGINFO("Unable to mount %s during GUI startup.\n", theme_path.c_str());
+				check = 1;
+			}
+		}
+
+		theme_path += "/TWRP/theme/ui.zip";
+		if (check || PageManager::LoadPackage("TWRP", theme_path, "main"))
+		{
+#endif // ifndef TW_OEM_BUILD
+			if (PageManager::LoadPackage("TWRP", TWRES "ui.xml", "main"))
+			{
+				gui_err("base_pkg_err=Failed to load base packages.");
+				goto error;
+			}
+#ifndef TW_OEM_BUILD
+		}
+	}
+#endif // ifndef TW_OEM_BUILD
 	// Set the default package
 	PageManager::SelectPackage("TWRP");
 
@@ -858,7 +940,7 @@ extern "C" int gui_loadCustomResources(void)
 {
 #ifndef TW_OEM_BUILD
 	if (!PartitionManager.Mount_Settings_Storage(false)) {
-		LOGERR("Unable to mount settings storage during GUI startup.\n");
+		LOGINFO("Unable to mount settings storage during GUI startup.\n");
 		return -1;
 	}
 
@@ -870,7 +952,7 @@ extern "C" int gui_loadCustomResources(void)
 		if (PageManager::ReloadPackage("TWRP", theme_path)) {
 			// Custom theme failed to load, try to load stock theme
 			if (PageManager::ReloadPackage("TWRP", TWRES "ui.xml")) {
-				LOGERR("Failed to load base packages.\n");
+				gui_err("base_pkg_err=Failed to load base packages.");
 				goto error;
 			}
 		}
@@ -920,7 +1002,7 @@ extern "C" int gui_startPage(const char *page_name, const int allow_commands, in
 	return runPages(page_name, stop_on_page_done);
 }
 
-static void * console_thread(void *cookie)
+static void * console_thread(void *cookie __unused)
 {
 	PageManager::SwitchToConsole();
 

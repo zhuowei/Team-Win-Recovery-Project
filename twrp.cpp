@@ -15,16 +15,16 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 #include <signal.h>
+#include "gui/twmsg.h"
 
 #include "cutils/properties.h"
 extern "C" {
-#include "minadbd/adb.h"
 #include "bootloader.h"
 }
 
@@ -38,6 +38,9 @@ extern "C" {
 #include "gui/gui.h"
 #include "set_metadata.h"
 }
+#include "gui/gui.hpp"
+#include "gui/pages.hpp"
+#include "gui/objects.hpp"
 #include "twcommon.h"
 #include "twrp-functions.hpp"
 #include "data.hpp"
@@ -45,6 +48,13 @@ extern "C" {
 #include "openrecoveryscript.hpp"
 #include "variables.h"
 #include "twrpDU.hpp"
+#ifdef TW_USE_NEW_MINADBD
+#include "adb.h"
+#else
+extern "C" {
+#include "minadbd.old/adb.h"
+}
+#endif
 
 #include "multirom.h"
 
@@ -80,7 +90,11 @@ int main(int argc, char **argv) {
 	// Handle ADB sideload
 	if (argc == 3 && strcmp(argv[1], "--adbd") == 0) {
 		property_set("ctl.stop", "adbd");
+#ifdef TW_USE_NEW_MINADBD
+		adb_main(0, DEFAULT_ADB_PORT);
+#else
 		adb_main(argv[2]);
+#endif
 		return 0;
 	}
 
@@ -178,20 +192,20 @@ int main(int argc, char **argv) {
 			lgetfilecon("/sbin/teamwin", &contexts);
 		}
 		if (!contexts) {
-			gui_print_color("warning", "Kernel does not have support for reading SELinux contexts.\n");
+			gui_warn("no_kernel_selinux=Kernel does not have support for reading SELinux contexts.");
 		} else {
 			free(contexts);
-			gui_print("Full SELinux support is present.\n");
+			gui_msg("full_selinux=Full SELinux support is present.");
 		}
 	}
 #else
-	gui_print_color("warning", "No SELinux support (no libselinux).\n");
+	gui_warn("no_selinux=No SELinux support (no libselinux).");
 #endif
 
 	PartitionManager.Mount_By_Path("/cache", true);
 
-	string Zip_File, Reboot_Value;
-	bool Cache_Wipe = false, Factory_Reset = false, Perform_Backup = false, Shutdown = false;
+	string Reboot_Value;
+	bool Shutdown = false;
 
 	{
 		TWPartition* misc = PartitionManager.Find_Partition_By_Path("/misc");
@@ -225,16 +239,25 @@ int main(int argc, char **argv) {
 				while (*ptr == '=')
 					ptr++;
 				if (*ptr) {
-					Zip_File = ptr;
+					string ORSCommand = "install ";
+					ORSCommand.append(ptr);
+
+					if (!OpenRecoveryScript::Insert_ORS_Command(ORSCommand))
+						break;
 				} else
 					LOGERR("argument error specifying zip file\n");
 			} else if (*argptr == 'w') {
-				if (len == 9)
-					Factory_Reset = true;
-				else if (len == 10)
-					Cache_Wipe = true;
+				if (len == 9) {
+					if (!OpenRecoveryScript::Insert_ORS_Command("wipe data\n"))
+						break;
+				} else if (len == 10) {
+					if (!OpenRecoveryScript::Insert_ORS_Command("wipe cache\n"))
+						break;
+				}
 			} else if (*argptr == 'n') {
-				Perform_Backup = true;
+				DataManager::SetValue(TW_BACKUP_NAME, gui_parse_text("{@auto_generate}"));
+				if (!OpenRecoveryScript::Insert_ORS_Command("backup BSDCAE\n"))
+					break;
 			} else if (*argptr == 'p') {
 				Shutdown = true;
 			} else if (*argptr == 's') {
@@ -274,28 +297,6 @@ int main(int argc, char **argv) {
 	LOGINFO("Backup of TWRP ramdisk done.\n");
 #endif
 
-	bool Keep_Going = true;
-	if (Perform_Backup) {
-		DataManager::SetValue(TW_BACKUP_NAME, "(Auto Generate)");
-		if (!OpenRecoveryScript::Insert_ORS_Command("backup BSDCAE\n"))
-			Keep_Going = false;
-	}
-	if (Keep_Going && !Zip_File.empty()) {
-		string ORSCommand = "install " + Zip_File;
-
-		if (!OpenRecoveryScript::Insert_ORS_Command(ORSCommand))
-			Keep_Going = false;
-	}
-	if (Keep_Going) {
-		if (Factory_Reset) {
-			if (!OpenRecoveryScript::Insert_ORS_Command("wipe data\n"))
-				Keep_Going = false;
-		} else if (Cache_Wipe) {
-			if (!OpenRecoveryScript::Insert_ORS_Command("wipe cache\n"))
-				Keep_Going = false;
-		}
-	}
-
 	TWFunc::Update_Log_File();
 	// Offer to decrypt if the device is encrypted
 	if (DataManager::GetIntValue(TW_IS_ENCRYPTED) != 0) {
@@ -323,6 +324,8 @@ int main(int argc, char **argv) {
 	DataManager::SetValue("tw_mtp_enabled", 1);
 #endif
 	DataManager::ReadSettingsFile();
+	PageManager::LoadLanguage(DataManager::GetStrValue("tw_language"));
+	GUIConsole::Translate_Now();
 
 	gui_rotate(DataManager::GetIntValue(TW_ROTATION));
 
@@ -351,13 +354,13 @@ int main(int argc, char **argv) {
 			if (!PartitionManager.Enable_MTP())
 				PartitionManager.Disable_MTP();
 			else
-				gui_print("MTP Enabled\n");
+				gui_msg("mtp_enabled=MTP Enabled");
 		} else {
 			PartitionManager.Disable_MTP();
 		}
 		property_set("mtp.crash_check", "0");
 	} else {
-		gui_print_color("warning", "MTP Crashed, not starting MTP on boot.\n");
+		gui_warn("mtp_crash=MTP Crashed, not starting MTP on boot.");
 		DataManager::SetValue("tw_mtp_enabled", 0);
 		PartitionManager.Disable_MTP();
 	}
@@ -366,34 +369,40 @@ int main(int argc, char **argv) {
 #endif
 #endif
 
+#ifndef TW_OEM_BUILD
 	// Check if system has never been changed
 	TWPartition* sys = PartitionManager.Find_Partition_By_Path("/system");
+	TWPartition* ven = PartitionManager.Find_Partition_By_Path("/vendor");
 	if (sys) {
-		if (DataManager::GetIntValue("tw_mount_system_ro") != 0) {
-			if (sys->Check_Lifetime_Writes() == 0) {
-				if (DataManager::GetIntValue("tw_never_show_system_ro_page") == 0) {
-					DataManager::SetValue("tw_back", "main");
-					if (gui_startPage("system_readonly", 1, 1) != 0) {
-						LOGERR("Failed to start system_readonly GUI page.\n");
-					}
+		if ((DataManager::GetIntValue("tw_mount_system_ro") == 0 && sys->Check_Lifetime_Writes() == 0) || DataManager::GetIntValue("tw_mount_system_ro") == 2) {
+			if (DataManager::GetIntValue("tw_never_show_system_ro_page") == 0) {
+				DataManager::SetValue("tw_back", "main");
+				if (gui_startPage("system_readonly", 1, 1) != 0) {
+					LOGERR("Failed to start system_readonly GUI page.\n");
 				}
-			} else {
-				DataManager::SetValue("tw_mount_system_ro", 0);
+			} else if (DataManager::GetIntValue("tw_mount_system_ro") == 0) {
 				sys->Change_Mount_Read_Only(false);
+				if (ven)
+					ven->Change_Mount_Read_Only(false);
 			}
+		} else if (DataManager::GetIntValue("tw_mount_system_ro") == 1) {
+			// Do nothing, user selected to leave system read only
 		} else {
 			sys->Change_Mount_Read_Only(false);
+			if (ven)
+				ven->Change_Mount_Read_Only(false);
 		}
 	}
-
+#endif
 	// Launch the main GUI
 	gui_start();
 
+#ifndef TW_OEM_BUILD
 	// Disable flashing of stock recovery
 	TWFunc::Disable_Stock_Recovery_Replace();
 	// Check for su to see if the device is rooted or not
-	if (PartitionManager.Mount_By_Path("/system", false) && DataManager::GetIntValue("tw_mount_system_ro") == 0) {
-		if (TWFunc::Path_Exists("/supersu/su") && !TWFunc::Path_Exists("/system/bin/su") && !TWFunc::Path_Exists("/system/xbin/su") && !TWFunc::Path_Exists("/system/bin/.ext/.su")) {
+	if (DataManager::GetIntValue("tw_mount_system_ro") == 0 && PartitionManager.Mount_By_Path("/system", false)) {
+		if (TWFunc::Path_Exists("/supersu/su") && TWFunc::Path_Exists("/system/bin") && !TWFunc::Path_Exists("/system/bin/su") && !TWFunc::Path_Exists("/system/xbin/su") && !TWFunc::Path_Exists("/system/bin/.ext/.su")) {
 			// Device doesn't have su installed
 			DataManager::SetValue("tw_busy", 1);
 			if (gui_startPage("installsu", 1, 1) != 0) {
@@ -403,11 +412,12 @@ int main(int argc, char **argv) {
 		sync();
 		PartitionManager.UnMount_By_Path("/system", false);
 	}
+#endif
 
 	// Reboot
 	TWFunc::Update_Intent_File(Reboot_Value);
 	TWFunc::Update_Log_File();
-	gui_print("Rebooting...\n");
+	gui_msg(Msg("rebooting=Rebooting..."));
 	string Reboot_Arg;
 	DataManager::GetValue("tw_reboot_arg", Reboot_Arg);
 	if (Reboot_Arg == "recovery")

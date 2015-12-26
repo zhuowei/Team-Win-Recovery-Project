@@ -20,8 +20,8 @@
 
 extern "C" {
 #include "../twcommon.h"
-#include "../minuitwrp/minui.h"
 }
+#include "../minuitwrp/minui.h"
 
 #include "rapidxml.hpp"
 #include "objects.hpp"
@@ -266,7 +266,7 @@ int GUIScrollList::Render(void)
 
 		// render the text
 		gr_color(mHeaderFontColor.red, mHeaderFontColor.green, mHeaderFontColor.blue, mHeaderFontColor.alpha);
-		gr_textEx(mRenderX + IconOffsetX + 5, yPos + (int)((mHeaderH - mFontHeight) / 2), mLastHeaderValue.c_str(), mFont->GetResource());
+		gr_textEx_scaleW(mRenderX + IconOffsetX + 5, yPos + (int)(mHeaderH / 2), mLastHeaderValue.c_str(), mFont->GetResource(), mRenderW, TEXT_ONLY_RIGHT, 0);
 
 		// Add the separator
 		gr_color(mHeaderSeparatorColor.red, mHeaderSeparatorColor.green, mHeaderSeparatorColor.blue, mHeaderSeparatorColor.alpha);
@@ -311,7 +311,7 @@ int GUIScrollList::Render(void)
 	return 0;
 }
 
-void GUIScrollList::RenderItem(size_t itemindex, int yPos, bool selected)
+void GUIScrollList::RenderItem(size_t itemindex __unused, int yPos, bool selected)
 {
 	RenderStdItem(yPos, selected, NULL, "implement RenderItem!");
 }
@@ -346,8 +346,8 @@ void GUIScrollList::RenderStdItem(int yPos, bool selected, ImageResource* icon, 
 
 	// render label text
 	int textX = mRenderX + maxIconWidth + 5;
-	int textY = yPos + (iconAndTextH - mFontHeight) / 2;
-	gr_textEx(textX, textY, text, mFont->GetResource());
+	int textY = yPos + (iconAndTextH / 2);
+	gr_textEx_scaleW(textX, textY, text, mFont->GetResource(), mRenderW, TEXT_ONLY_RIGHT, 0);
 }
 
 int GUIScrollList::Update(void)
@@ -397,7 +397,7 @@ int GUIScrollList::Update(void)
 	return 0;
 }
 
-size_t GUIScrollList::HitTestItem(int x, int y)
+size_t GUIScrollList::HitTestItem(int x __unused, int y)
 {
 	// We only care about y position
 	if (y < mRenderY || y - mRenderY <= mHeaderH || y - mRenderY > mRenderH)
@@ -606,4 +606,44 @@ void GUIScrollList::SetPageFocus(int inFocus)
 		scrollingSpeed = 0; // stop kinetic scrolling on page changes
 		mUpdate = 1;
 	}
+}
+
+bool GUIScrollList::AddLines(std::vector<std::string>* origText, std::vector<std::string>* origColor, size_t* lastCount, std::vector<std::string>* rText, std::vector<std::string>* rColor)
+{
+	if (*lastCount == origText->size())
+		return false; // nothing to add
+
+	size_t prevCount = *lastCount;
+	*lastCount = origText->size();
+
+	// Due to word wrap, figure out what / how the newly added text needs to be added to the render vector that is word wrapped
+	// Note, that multiple consoles on different GUI pages may be different widths or use different fonts, so the word wrapping
+	// may different in different console windows
+	for (size_t i = prevCount; i < *lastCount; i++) {
+		string curr_line = origText->at(i);
+		string curr_color;
+		if (origColor)
+			curr_color = origColor->at(i);
+		for(;;) {
+			size_t line_char_width = gr_ttf_maxExW(curr_line.c_str(), mFont->GetResource(), mRenderW);
+			if (line_char_width < curr_line.size()) {
+				//string left = curr_line.substr(0, line_char_width);
+				size_t wrap_pos = curr_line.find_last_of(" ,./:-_;", line_char_width - 1);
+				if (wrap_pos == string::npos)
+					wrap_pos = line_char_width;
+				else if (wrap_pos < line_char_width - 1)
+					wrap_pos++;
+				rText->push_back(curr_line.substr(0, wrap_pos));
+				if (origColor)
+					rColor->push_back(curr_color);
+				curr_line = curr_line.substr(wrap_pos);
+			} else {
+				rText->push_back(curr_line);
+				if (origColor)
+					rColor->push_back(curr_color);
+				break;
+			}
+		}
+	}
+	return true;
 }

@@ -52,14 +52,13 @@
 
 extern "C" {
 #include "../twcommon.h"
-#include "../minuitwrp/minui.h"
 #include "../variables.h"
 #include "../twinstall.h"
 #include "cutils/properties.h"
-#include "../minadbd/adb.h"
 #include "../adb_install.h"
 #include "../set_metadata.h"
 };
+#include "../minuitwrp/minui.h"
 
 #include "rapidxml.hpp"
 #include "objects.hpp"
@@ -206,6 +205,7 @@ GUIAction::GUIAction(xml_node<>* node)
 		ADD_ACTION(cancelbackup);
 		ADD_ACTION(checkpartitionlifetimewrites);
 		ADD_ACTION(mountsystemtoggle);
+		ADD_ACTION(setlanguage);
 
 		ADD_ACTION(rotation);
 		ADD_ACTION(multirom);
@@ -327,7 +327,7 @@ GUIAction::GUIAction(xml_node<>* node)
 	}
 }
 
-int GUIAction::NotifyTouch(TOUCH_STATE state, int x, int y)
+int GUIAction::NotifyTouch(TOUCH_STATE state __unused, int x __unused, int y __unused)
 {
 	if (state == TOUCH_RELEASE)
 		doActions();
@@ -387,12 +387,12 @@ int GUIAction::NotifyVarChange(const std::string& varName, const std::string& va
 
 void GUIAction::simulate_progress_bar(void)
 {
-	gui_print("Simulating actions...\n");
+	gui_msg("simulating=Simulating actions...");
 	for (int i = 0; i < 5; i++)
 	{
 		if (PartitionManager.stop_backup.get_value()) {
 			DataManager::SetValue("tw_cancel_backup", 1);
-			gui_print("Backup Canceled.\n");
+			gui_msg("backup_cancel=Backup Canceled.");
 			DataManager::SetValue("ui_progress", 0);
 			PartitionManager.stop_backup.set_value(0);
 			return;
@@ -428,10 +428,10 @@ int GUIAction::flash_zip(std::string filename, int* wipe_cache)
 		{
 			DataManager::SetValue("tw_operation", "Configuring TWRP");
 			DataManager::SetValue("tw_partition", "");
-			gui_print("Configuring TWRP...\n");
+			gui_msg("config_twrp=Configuring TWRP...");
 			if (TWFunc::Exec_Cmd("/sbin/installTwrp reinstall") < 0)
 			{
-				gui_print("Unable to configure TWRP with this kernel.\n");
+				gui_msg("config_twrp_err=Unable to configure TWRP with this kernel.");
 			}
 		}
 	}
@@ -548,6 +548,7 @@ void GUIAction::operation_end(const int operation_status)
 	DataManager::SetValue("tw_operation_state", 1);
 	DataManager::SetValue(TW_ACTION_BUSY, 0);
 	blankTimer.resetTimerAndUnblank();
+	property_set("twrp.action_complete", "1");
 	time(&Stop);
 	if ((int) difftime(Stop, Start) > 10)
 		DataManager::Vibrate("tw_action_vibrate");
@@ -565,7 +566,7 @@ int GUIAction::reboot(std::string arg)
 	return 0;
 }
 
-int GUIAction::home(std::string arg)
+int GUIAction::home(std::string arg __unused)
 {
 	PageManager::SelectPackage("TWRP");
 	gui_changePage("main");
@@ -582,16 +583,24 @@ int GUIAction::key(std::string arg)
 
 int GUIAction::page(std::string arg)
 {
+	property_set("twrp.action_complete", "0");
 	std::string page_name = gui_parse_text(arg);
 	return gui_changePage(page_name);
 }
 
-int GUIAction::reload(std::string arg)
+int GUIAction::reload(std::string arg __unused)
 {
-	return !TWFunc::reloadTheme();
+	PageManager::RequestReload();
+	// The actual reload is handled in pages.cpp in PageManager::RunReload()
+	// The reload will occur on the next Update or Render call and will
+	// be performed in the rendoer thread instead of the action thread
+	// to prevent crashing which could occur when we start deleting
+	// GUI resources in the action thread while we attempt to render
+	// with those same resources in another thread.
+	return 0;
 }
 
-int GUIAction::readBackup(std::string arg)
+int GUIAction::readBackup(std::string arg __unused)
 {
 	string Restore_Name;
 	DataManager::GetValue("tw_restore", Restore_Name);
@@ -627,12 +636,12 @@ int GUIAction::mount(std::string arg)
 		if (!simulate)
 			PartitionManager.usb_storage_enable();
 		else
-			gui_print("Simulating actions...\n");
+			gui_msg("simulating=Simulating actions...");
 	} else if (!simulate) {
 		PartitionManager.Mount_By_Path(arg, true);
 		PartitionManager.Add_MTP_Storage(arg);
 	} else
-		gui_print("Simulating actions...\n");
+		gui_msg("simulating=Simulating actions...");
 	return 0;
 }
 
@@ -642,20 +651,20 @@ int GUIAction::unmount(std::string arg)
 		if (!simulate)
 			PartitionManager.usb_storage_disable();
 		else
-			gui_print("Simulating actions...\n");
+			gui_msg("simulating=Simulating actions...");
 		DataManager::SetValue(TW_ACTION_BUSY, 0);
 	} else if (!simulate) {
 		PartitionManager.UnMount_By_Path(arg, true);
 	} else
-		gui_print("Simulating actions...\n");
+		gui_msg("simulating=Simulating actions...");
 	return 0;
 }
 
-int GUIAction::restoredefaultsettings(std::string arg)
+int GUIAction::restoredefaultsettings(std::string arg __unused)
 {
 	operation_start("Restore Defaults");
 	if (simulate) // Simulated so that people don't accidently wipe out the "simulation is on" setting
-		gui_print("Simulating actions...\n");
+		gui_msg("simulating=Simulating actions...");
 	else {
 		DataManager::ResetDefaults();
 		PartitionManager.Update_System_Details();
@@ -665,7 +674,7 @@ int GUIAction::restoredefaultsettings(std::string arg)
 	return 0;
 }
 
-int GUIAction::copylog(std::string arg)
+int GUIAction::copylog(std::string arg __unused)
 {
 	operation_start("Copy Log");
 	if (!simulate)
@@ -676,7 +685,7 @@ int GUIAction::copylog(std::string arg)
 		TWFunc::copy_file("/tmp/recovery.log", dst.c_str(), 0755);
 		tw_set_default_metadata(dst.c_str());
 		sync();
-		gui_print("Copied recovery log to %s.\n", DataManager::GetCurrentStoragePath().c_str());
+		gui_msg(Msg("copy_log=Copied recovery log to {1}.")(DataManager::GetCurrentStoragePath()));
 	} else
 		simulate_progress_bar();
 	operation_end(0);
@@ -740,7 +749,7 @@ int GUIAction::compute(std::string arg)
 	return -1;
 }
 
-int GUIAction::setguitimezone(std::string arg)
+int GUIAction::setguitimezone(std::string arg __unused)
 {
 	string SelectedZone;
 	DataManager::GetValue(TW_TIME_ZONE_GUISEL, SelectedZone); // read the selected time zone into SelectedZone
@@ -770,10 +779,10 @@ int GUIAction::overlay(std::string arg)
 	return gui_changeOverlay(arg);
 }
 
-int GUIAction::queuezip(std::string arg)
+int GUIAction::queuezip(std::string arg __unused)
 {
 	if (zip_queue_index >= 10) {
-		gui_print("Maximum zip queue reached!\n");
+		gui_msg("max_queue=Maximum zip queue reached!");
 		return 0;
 	}
 	DataManager::GetValue("tw_filename", zip_queue[zip_queue_index]);
@@ -784,10 +793,10 @@ int GUIAction::queuezip(std::string arg)
 	return 0;
 }
 
-int GUIAction::cancelzip(std::string arg)
+int GUIAction::cancelzip(std::string arg __unused)
 {
 	if (zip_queue_index <= 0) {
-		gui_print("Minimum zip queue reached!\n");
+		gui_msg("min_queue=Minimum zip queue reached!");
 		return 0;
 	} else {
 		zip_queue_index--;
@@ -796,7 +805,7 @@ int GUIAction::cancelzip(std::string arg)
 	return 0;
 }
 
-int GUIAction::queueclear(std::string arg)
+int GUIAction::queueclear(std::string arg __unused)
 {
 	zip_queue_index = 0;
 	DataManager::SetValue(TW_ZIP_QUEUE_COUNT, zip_queue_index);
@@ -811,7 +820,7 @@ int GUIAction::sleep(std::string arg)
 	return 0;
 }
 
-int GUIAction::appenddatetobackupname(std::string arg)
+int GUIAction::appenddatetobackupname(std::string arg __unused)
 {
 	operation_start("AppendDateToBackupName");
 	string Backup_Name;
@@ -824,7 +833,7 @@ int GUIAction::appenddatetobackupname(std::string arg)
 	return 0;
 }
 
-int GUIAction::generatebackupname(std::string arg)
+int GUIAction::generatebackupname(std::string arg __unused)
 {
 	operation_start("GenerateBackupName");
 	TWFunc::Auto_Generate_Backup_Name();
@@ -832,7 +841,7 @@ int GUIAction::generatebackupname(std::string arg)
 	return 0;
 }
 
-int GUIAction::checkpartitionlist(std::string arg)
+int GUIAction::checkpartitionlist(std::string arg __unused)
 {
 	string Wipe_List, wipe_path;
 	int count = 0;
@@ -859,7 +868,7 @@ int GUIAction::checkpartitionlist(std::string arg)
 		return 0;
 }
 
-int GUIAction::getpartitiondetails(std::string arg)
+int GUIAction::getpartitiondetails(std::string arg __unused)
 {
 	string Wipe_List, wipe_path;
 	int count = 0;
@@ -903,11 +912,11 @@ int GUIAction::getpartitiondetails(std::string arg)
 					DataManager::SetValue("tw_partition_can_resize", 1);
 				else
 					DataManager::SetValue("tw_partition_can_resize", 0);
-				if (TWFunc::Path_Exists("/sbin/mkdosfs"))
+				if (TWFunc::Path_Exists("/sbin/mkfs.fat"))
 					DataManager::SetValue("tw_partition_vfat", 1);
 				else
 					DataManager::SetValue("tw_partition_vfat", 0);
-				if (TWFunc::Path_Exists("/sbin/mkfs.exfat"))
+				if (TWFunc::Path_Exists("/sbin/mkexfatfs"))
 					DataManager::SetValue("tw_partition_exfat", 1);
 				else
 					DataManager::SetValue("tw_partition_exfat", 0);
@@ -930,7 +939,7 @@ int GUIAction::getpartitiondetails(std::string arg)
 	return 0;
 }
 
-int GUIAction::screenshot(std::string arg)
+int GUIAction::screenshot(std::string arg __unused)
 {
 	time_t tm;
 	char path[256];
@@ -968,7 +977,7 @@ int GUIAction::screenshot(std::string arg)
 		chmod(path, 0666);
 		chown(path, uid, gid);
 
-		gui_print("Screenshot was saved to %s\n", path);
+		gui_msg(Msg("screenshot_saved=Screenshot was saved to %s")(path));
 
 		// blink to notify that the screenshow was taken
 		gr_color(255, 255, 255, 255);
@@ -976,7 +985,7 @@ int GUIAction::screenshot(std::string arg)
 		gr_flip();
 		gui_forceRender();
 	} else {
-		LOGERR("Failed to take a screenshot!\n");
+		gui_err("screenshot_err=Failed to take a screenshot!");
 	}
 	return 0;
 }
@@ -1002,7 +1011,7 @@ int GUIAction::fileexists(std::string arg)
 void GUIAction::reinject_after_flash()
 {
 	if (DataManager::GetIntValue(TW_HAS_INJECTTWRP) == 1 && DataManager::GetIntValue(TW_INJECT_AFTER_ZIP) == 1) {
-		gui_print("Injecting TWRP into boot image...\n");
+		gui_msg("injecttwrp=Injecting TWRP into boot image...");
 		if (simulate) {
 			simulate_progress_bar();
 		} else {
@@ -1013,7 +1022,7 @@ void GUIAction::reinject_after_flash()
 				string injectcmd = "injecttwrp --dump /tmp/backup_recovery_ramdisk.img /tmp/injected_boot.img --flash bd=" + Boot->Actual_Block_Device;
 				TWFunc::Exec_Cmd(injectcmd);
 			}
-			gui_print("TWRP injection complete.\n");
+			gui_msg("done=Done.");
 		}
 	}
 
@@ -1042,7 +1051,7 @@ int GUIAction::flash(std::string arg)
 		ret_val = flash_zip(zip_path, &wipe_cache);
 		TWFunc::SetPerformanceMode(false);
 		if (ret_val != 0) {
-			gui_print("Error flashing zip '%s'\n", zip_path.c_str());
+			gui_msg(Msg(msg::kError, "zip_err=Error installing zip file '{1}'")(zip_path));
 			ret_val = 1;
 			break;
 		}
@@ -1050,7 +1059,7 @@ int GUIAction::flash(std::string arg)
 	zip_queue_index = 0;
 
 	if (wipe_cache) {
-		gui_print("One or more zip requested a cache wipe\nWiping cache now.\n");
+		gui_msg("zip_wipe_cache=One or more zip requested a cache wipe -- Wiping cache now.");
 		PartitionManager.Wipe_By_Path("/cache");
 	}
 
@@ -1113,7 +1122,7 @@ int GUIAction::wipe(std::string arg)
 					LOGINFO("wipe_path '%s'\n", wipe_path.c_str());
 					if (wipe_path == "/and-sec") {
 						if (!PartitionManager.Wipe_Android_Secure()) {
-							LOGERR("Unable to wipe android secure\n");
+							gui_msg("and_sec_wipe_err=Unable to wipe android secure");
 							ret_val = false;
 							break;
 						} else {
@@ -1121,7 +1130,7 @@ int GUIAction::wipe(std::string arg)
 						}
 					} else if (wipe_path == "DALVIK") {
 						if (!PartitionManager.Wipe_Dalvik_Cache()) {
-							LOGERR("Failed to wipe dalvik\n");
+							gui_err("dalvik_wipe_err=Failed to wipe dalvik");
 							ret_val = false;
 							break;
 						} else {
@@ -1137,7 +1146,7 @@ int GUIAction::wipe(std::string arg)
 					}
 					if (!skip) {
 						if (!PartitionManager.Wipe_By_Path(wipe_path)) {
-							LOGERR("Unable to wipe '%s'\n", wipe_path.c_str());
+							gui_msg(Msg(msg::kError, "unable_to_wipe=Unable to wipe {1}.")(wipe_path));
 							ret_val = false;
 							break;
 						} else if (wipe_path == DataManager::GetSettingsStoragePath()) {
@@ -1177,7 +1186,7 @@ int GUIAction::wipe(std::string arg)
 	return 0;
 }
 
-int GUIAction::refreshsizes(std::string arg)
+int GUIAction::refreshsizes(std::string arg __unused)
 {
 	operation_start("Refreshing Sizes");
 	if (simulate) {
@@ -1202,6 +1211,8 @@ int GUIAction::nandroid(std::string arg)
 		if (arg == "backup") {
 			string Backup_Name;
 			DataManager::GetValue(TW_BACKUP_NAME, Backup_Name);
+			string auto_gen = gui_lookup("auto_gen", "(Auto Generate)");
+			string curr_date = gui_lookup("curr_date", "(Current Date)");
 			if (Backup_Name == "(Auto Generate)" || Backup_Name == "(Current Date)" || Backup_Name == "0" || Backup_Name == "(" || PartitionManager.Check_Backup_Name(true) == 0) {
 				ret = PartitionManager.Run_Backup();
 			}
@@ -1209,7 +1220,7 @@ int GUIAction::nandroid(std::string arg)
 				operation_end(1);
 				return -1;
 			}
-			DataManager::SetValue(TW_BACKUP_NAME, "(Auto Generate)");
+			DataManager::SetValue(TW_BACKUP_NAME, auto_gen);
 		} else if (arg == "restore") {
 			string Restore_Name;
 			DataManager::GetValue("tw_restore", Restore_Name);
@@ -1228,7 +1239,7 @@ int GUIAction::nandroid(std::string arg)
 		}
 		else {
 			DataManager::SetValue("tw_cancel_backup", 1);
-			gui_print("Backup Canceled.\n");
+			gui_msg("backup_cancel=Backup Canceled.");
 			ret = 0;
 		}
 		operation_end(ret);
@@ -1237,7 +1248,7 @@ int GUIAction::nandroid(std::string arg)
 	return 0;
 }
 
-int GUIAction::cancelbackup(std::string arg) {
+int GUIAction::cancelbackup(std::string arg __unused) {
 	if (simulate) {
 		PartitionManager.stop_backup.set_value(1);
 	}
@@ -1250,7 +1261,7 @@ int GUIAction::cancelbackup(std::string arg) {
 	return 0;
 }
 
-int GUIAction::fixpermissions(std::string arg)
+int GUIAction::fixpermissions(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1281,7 +1292,7 @@ int GUIAction::dd(std::string arg)
 	return 0;
 }
 
-int GUIAction::partitionsd(std::string arg)
+int GUIAction::partitionsd(std::string arg __unused)
 {
 	operation_start("Partition SD Card");
 	int ret_val = 0;
@@ -1292,7 +1303,7 @@ int GUIAction::partitionsd(std::string arg)
 		int allow_partition;
 		DataManager::GetValue(TW_ALLOW_PARTITION_SDCARD, allow_partition);
 		if (allow_partition == 0) {
-			gui_print("This device does not have a real SD Card!\nAborting!\n");
+			gui_err("no_real_sdcard=This device does not have a real SD Card! Aborting!");
 		} else {
 			if (!PartitionManager.Partition_SDCard())
 				ret_val = 1; // failed
@@ -1303,7 +1314,7 @@ int GUIAction::partitionsd(std::string arg)
 
 }
 
-int GUIAction::installhtcdumlock(std::string arg)
+int GUIAction::installhtcdumlock(std::string arg __unused)
 {
 	operation_start("Install HTC Dumlock");
 	if (simulate) {
@@ -1315,7 +1326,7 @@ int GUIAction::installhtcdumlock(std::string arg)
 	return 0;
 }
 
-int GUIAction::htcdumlockrestoreboot(std::string arg)
+int GUIAction::htcdumlockrestoreboot(std::string arg __unused)
 {
 	operation_start("HTC Dumlock Restore Boot");
 	if (simulate) {
@@ -1327,7 +1338,7 @@ int GUIAction::htcdumlockrestoreboot(std::string arg)
 	return 0;
 }
 
-int GUIAction::htcdumlockreflashrecovery(std::string arg)
+int GUIAction::htcdumlockreflashrecovery(std::string arg __unused)
 {
 	operation_start("HTC Dumlock Reflash Recovery");
 	if (simulate) {
@@ -1382,7 +1393,7 @@ int GUIAction::terminalcommand(std::string arg)
 
 		fp = popen(command.c_str(), "r");
 		if (fp == NULL) {
-			LOGERR("Error opening command to run.\n");
+			LOGERR("Error opening command to run (%s).\n", strerror(errno));
 		} else {
 			int fd = fileno(fp), has_data = 0, check = 0, keep_going = -1, bytes_read = 0;
 			struct timeval timeout;
@@ -1423,7 +1434,7 @@ int GUIAction::terminalcommand(std::string arg)
 	return 0;
 }
 
-int GUIAction::killterminal(std::string arg)
+int GUIAction::killterminal(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1437,23 +1448,23 @@ int GUIAction::killterminal(std::string arg)
 	return 0;
 }
 
-int GUIAction::reinjecttwrp(std::string arg)
+int GUIAction::reinjecttwrp(std::string arg __unused)
 {
 	int op_status = 0;
 	operation_start("ReinjectTWRP");
-	gui_print("Injecting TWRP into boot image...\n");
+	gui_msg("injecttwrp=Injecting TWRP into boot image...");
 	if (simulate) {
 		simulate_progress_bar();
 	} else {
 		TWFunc::Exec_Cmd("injecttwrp --dump /tmp/backup_recovery_ramdisk.img /tmp/injected_boot.img --flash");
-		gui_print("TWRP injection complete.\n");
+		gui_msg("done=Done.");
 	}
 
 	operation_end(op_status);
 	return 0;
 }
 
-int GUIAction::checkbackupname(std::string arg)
+int GUIAction::checkbackupname(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1470,7 +1481,7 @@ int GUIAction::checkbackupname(std::string arg)
 	return 0;
 }
 
-int GUIAction::decrypt(std::string arg)
+int GUIAction::decrypt(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1505,14 +1516,14 @@ int GUIAction::decrypt(std::string arg)
 	return 0;
 }
 
-int GUIAction::adbsideload(std::string arg)
+int GUIAction::adbsideload(std::string arg __unused)
 {
 	operation_start("Sideload");
 	if (simulate) {
 		simulate_progress_bar();
 		operation_end(0);
 	} else {
-		gui_print("Starting ADB sideload feature...\n");
+		gui_msg("start_sideload=Starting ADB sideload feature...");
 		bool mtp_was_enabled = TWFunc::Toggle_MTP(false);
 
 		// wait for the adb connection
@@ -1521,7 +1532,7 @@ int GUIAction::adbsideload(std::string arg)
 
 		if (ret != 0) {
 			if (ret == -2)
-				gui_print("You need adb 1.0.32 or newer to sideload to this device.\n");
+				gui_msg("need_new_adb=You need adb 1.0.32 or newer to sideload to this device.");
 			ret = 1; // failure
 		} else {
 			int wipe_cache = 0;
@@ -1555,11 +1566,11 @@ int GUIAction::adbsideload(std::string arg)
 	return 0;
 }
 
-int GUIAction::adbsideloadcancel(std::string arg)
+int GUIAction::adbsideloadcancel(std::string arg __unused)
 {
 	struct stat st;
 	DataManager::SetValue("tw_has_cancel", 0); // Remove cancel button from gui
-	gui_print("Cancelling ADB sideload...\n");
+	gui_msg("cancel_sideload=Cancelling ADB sideload...");
 	LOGINFO("Signaling child sideload process to exit.\n");
 	// Calling stat() on this magic filename signals the minadbd
 	// subprocess to shut down.
@@ -1579,7 +1590,7 @@ int GUIAction::adbsideloadcancel(std::string arg)
 	return 0;
 }
 
-int GUIAction::openrecoveryscript(std::string arg)
+int GUIAction::openrecoveryscript(std::string arg __unused)
 {
 	int op_status = 1;
 
@@ -1593,14 +1604,15 @@ int GUIAction::openrecoveryscript(std::string arg)
 		// Run those first.
 		int reboot = 0;
 		if (TWFunc::Path_Exists(SCRIPT_FILE_TMP)) {
-			gui_print("Processing AOSP recovery commands...\n");
+			gui_msg("running_recovery_commands=Running Recovery Commands");
 			if (OpenRecoveryScript::run_script_file() == 0) {
 				reboot = 1;
+				op_status = 0;
 			}
 		}
 		// Check for the ORS file in /cache and attempt to run those commands.
 		if (OpenRecoveryScript::check_for_script_file()) {
-			gui_print("Processing OpenRecoveryScript file...\n");
+			gui_msg("running_ors=Running OpenRecoveryScript");
 			if (OpenRecoveryScript::run_script_file() == 0) {
 				reboot = 1;
 				op_status = 0;
@@ -1621,7 +1633,7 @@ int GUIAction::openrecoveryscript(std::string arg)
 	return 0;
 }
 
-int GUIAction::installsu(std::string arg)
+int GUIAction::installsu(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1637,7 +1649,7 @@ int GUIAction::installsu(std::string arg)
 	return 0;
 }
 
-int GUIAction::fixsu(std::string arg)
+int GUIAction::fixsu(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1653,7 +1665,7 @@ int GUIAction::fixsu(std::string arg)
 	return 0;
 }
 
-int GUIAction::decrypt_backup(std::string arg)
+int GUIAction::decrypt_backup(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1677,7 +1689,7 @@ int GUIAction::decrypt_backup(std::string arg)
 	return 0;
 }
 
-int GUIAction::repair(std::string arg)
+int GUIAction::repair(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1690,7 +1702,6 @@ int GUIAction::repair(std::string arg)
 		if (PartitionManager.Repair_By_Path(part_path, true)) {
 			op_status = 0; // success
 		} else {
-			LOGERR("Error repairing file system.\n");
 			op_status = 1; // fail
 		}
 	}
@@ -1699,7 +1710,7 @@ int GUIAction::repair(std::string arg)
 	return 0;
 }
 
-int GUIAction::resize(std::string arg)
+int GUIAction::resize(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1712,7 +1723,6 @@ int GUIAction::resize(std::string arg)
 		if (PartitionManager.Resize_By_Path(part_path, true)) {
 			op_status = 0; // success
 		} else {
-			LOGERR("Error resizing file system.\n");
 			op_status = 1; // fail
 		}
 	}
@@ -1721,7 +1731,7 @@ int GUIAction::resize(std::string arg)
 	return 0;
 }
 
-int GUIAction::changefilesystem(std::string arg)
+int GUIAction::changefilesystem(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1735,7 +1745,7 @@ int GUIAction::changefilesystem(std::string arg)
 		if (PartitionManager.Wipe_By_Path(part_path, file_system)) {
 			op_status = 0; // success
 		} else {
-			LOGERR("Error changing file system.\n");
+			gui_err("change_fs_err=Error changing file system.");
 			op_status = 1; // fail
 		}
 	}
@@ -1744,7 +1754,7 @@ int GUIAction::changefilesystem(std::string arg)
 	return 0;
 }
 
-int GUIAction::startmtp(std::string arg)
+int GUIAction::startmtp(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1758,7 +1768,7 @@ int GUIAction::startmtp(std::string arg)
 	return 0;
 }
 
-int GUIAction::stopmtp(std::string arg)
+int GUIAction::stopmtp(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1772,7 +1782,7 @@ int GUIAction::stopmtp(std::string arg)
 	return 0;
 }
 
-int GUIAction::flashimage(std::string arg)
+int GUIAction::flashimage(std::string arg __unused)
 {
 	int op_status = 0;
 
@@ -1814,6 +1824,7 @@ int GUIAction::mountsystemtoggle(std::string arg)
 {
 	int op_status = 0;
 	bool remount_system = PartitionManager.Is_Mounted_By_Path("/system");
+	bool remount_vendor = PartitionManager.Is_Mounted_By_Path("/vendor");
 
 	operation_start("Toggle System Mount");
 	if (!PartitionManager.UnMount_By_Path("/system", true)) {
@@ -1829,6 +1840,20 @@ int GUIAction::mountsystemtoggle(std::string arg)
 				Part->Change_Mount_Read_Only(true);
 			}
 			if (remount_system) {
+				Part->Mount(true);
+			}
+			op_status = 0; // success
+		} else {
+			op_status = 1; // fail
+		}
+		Part = PartitionManager.Find_Partition_By_Path("/vendor");
+		if (Part) {
+			if (arg == "0") {
+				Part->Change_Mount_Read_Only(false);
+			} else {
+				Part->Change_Mount_Read_Only(true);
+			}
+			if (remount_vendor) {
 				Part->Mount(true);
 			}
 			op_status = 0; // success
@@ -1862,6 +1887,19 @@ int GUIAction::checkpartitionlifetimewrites(std::string arg)
 	return 0;
 }
 
+int GUIAction::setlanguage(std::string arg __unused)
+{
+	int op_status = 0;
+
+	operation_start("Set Language");
+	PageManager::LoadLanguage(DataManager::GetStrValue("tw_language"));
+	PageManager::RequestReload();
+	op_status = 0; // success
+
+	operation_end(op_status);
+	return 0;
+}
+
 int GUIAction::rotation(std::string arg)
 {
 	int rot = atoi(arg.c_str());
@@ -1870,14 +1908,6 @@ int GUIAction::rotation(std::string arg)
 		return 0;
 
 	return !gui_rotate(rot);
-}
-
-int GUIAction::timeout(std::string arg)
-{
-#ifndef TW_NO_SCREEN_TIMEOUT
-	blankTimer.blankScreen();
-#endif
-	return 0;
 }
 
 int GUIAction::multirom(std::string arg)

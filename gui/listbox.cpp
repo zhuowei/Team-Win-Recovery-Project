@@ -17,17 +17,18 @@
 */
 
 #include <string.h>
-#include <sys/stat.h>
-#include <dirent.h>
 
 extern "C" {
 #include "../twcommon.h"
-#include "../minuitwrp/minui.h"
 }
+#include "../minuitwrp/minui.h"
 
 #include "rapidxml.hpp"
 #include "objects.hpp"
 #include "../data.hpp"
+#include "pages.hpp"
+
+extern std::vector<language_struct> Language_List;
 
 GUIListBox::GUIListBox(xml_node<>* node) : GUIScrollList(node)
 {
@@ -35,6 +36,7 @@ GUIListBox::GUIListBox(xml_node<>* node) : GUIScrollList(node)
 	xml_node<>* child;
 	mIconSelected = mIconUnselected = NULL;
 	mUpdate = 0;
+	isCheckList = false;
 
 	// Get the icons, if any
 	child = FindNode(node, "icon");
@@ -57,25 +59,57 @@ GUIListBox::GUIListBox(xml_node<>* node) : GUIScrollList(node)
 			DataManager::SetValue(mVariable, attr->value());
 		// Get the currently selected value for the list
 		DataManager::GetValue(mVariable, currentValue);
+		if (mVariable == "tw_language") {
+			std::vector<language_struct>::iterator iter;
+			for (iter = Language_List.begin(); iter != Language_List.end(); iter++) {
+				ListItem data;
+				data.displayName = (*iter).displayvalue;
+				data.variableValue = (*iter).filename;
+				data.action = NULL;
+				if (currentValue == (*iter).filename) {
+					data.selected = 1;
+					DataManager::SetValue("tw_language_display", (*iter).displayvalue);
+				} else
+					data.selected = 0;
+				mListItems.push_back(data);
+			}
+		}
 	}
+	else
+		allowSelection = false;		// allows using listbox as a read-only list or menu
 
 	// Get the data for the list
 	child = FindNode(node, "listitem");
 	while (child) {
-		ListData data;
+		ListItem item;
 
 		attr = child->first_attribute("name");
-		if (!attr) return;
-		data.displayName = attr->value();
-
-		data.variableValue = child->value();
-		if (child->value() == currentValue) {
-			data.selected = 1;
-		} else {
-			data.selected = 0;
+		if (!attr)
+			continue;
+		item.displayName = gui_parse_text(attr->value());
+		item.variableValue = gui_parse_text(child->value());
+		item.selected = (child->value() == currentValue);
+		item.action = NULL;
+		xml_node<>* action = child->first_node("action");
+		if (action) {
+			item.action = new GUIAction(action);
+			allowSelection = true;
+		}
+		xml_node<>* variable_name = child->first_node("data");
+		if (variable_name) {
+			attr = variable_name->first_attribute("variable");
+			if (attr) {
+				item.variableName = attr->value();
+				item.selected = (DataManager::GetIntValue(item.variableName) != 0);
+				allowSelection = true;
+				isCheckList = true;
+			}
 		}
 
-		mList.push_back(data);
+		LoadConditions(child, item.mConditions);
+
+		mListItems.push_back(item);
+		mVisibleItems.push_back(mListItems.size()-1);
 
 		child = child->next_sibling("listitem");
 	}
@@ -119,43 +153,46 @@ int GUIListBox::NotifyVarChange(const std::string& varName, const std::string& v
 
 	// Check to see if the variable that we are using to store the list selected value has been updated
 	if (varName == mVariable) {
-		int i, listSize = mList.size();
-
 		currentValue = value;
-
-		for (i = 0; i < listSize; i++) {
-			if (mList.at(i).variableValue == currentValue) {
-				mList.at(i).selected = 1;
-				SetVisibleListLocation(i);
-			} else
-				mList.at(i).selected = 0;
-		}
-
 		mUpdate = 1;
-		return 0;
-	} else if(!mItemsVar.empty() && mItemsVar == varName) {
-		std::string n;
-		char *cstr = new char[value.size()+1];
-		strcpy(cstr, value.c_str());
-		mList.clear();
-		char *p = strtok(cstr, "\n");
-		while(p)
-		{
-			n = std::string(p);
-			ListData data;
-			data.displayName = n;
-			data.variableValue = n;
-			if(n == currentValue)
-				data.selected = 1;
-			else
-				data.selected = 0;
-			mList.push_back(data);
-			p = strtok(NULL, "\n");
-		}
-		delete[] cstr;
-		mUpdate = 1;
-		return 0;
 	}
+
+	std::vector<size_t> mVisibleItemsOld;
+	std::swap(mVisibleItemsOld, mVisibleItems);
+	for (size_t i = 0; i < mListItems.size(); i++) {
+		ListItem& item = mListItems[i];
+		// update per-item visibility condition
+		bool itemVisible = UpdateConditions(item.mConditions, varName);
+		if (itemVisible)
+			mVisibleItems.push_back(i);
+
+		if (isCheckList)
+		{
+			if (item.variableName == varName || varName.empty()) {
+				std::string val;
+				DataManager::GetValue(item.variableName, val);
+				item.selected = (val != "0");
+				mUpdate = 1;
+			}
+		}
+		else if (varName == mVariable) {
+			if (item.variableValue == currentValue) {
+				item.selected = 1;
+				SetVisibleListLocation(mVisibleItems.empty() ? 0 : mVisibleItems.size()-1);
+			} else {
+				item.selected = 0;
+			}
+		}
+	}
+
+	if (mVisibleItemsOld != mVisibleItems) {
+		mUpdate = 1; // some item's visibility has changed
+		if (firstDisplayedItem >= (int)mVisibleItems.size()) {
+			// all items in the view area were removed - make last item visible
+			SetVisibleListLocation(mVisibleItems.empty() ? 0 : mVisibleItems.size()-1);
+		}
+	}
+
 	return 0;
 }
 
@@ -172,28 +209,41 @@ void GUIListBox::SetPageFocus(int inFocus)
 
 size_t GUIListBox::GetItemCount()
 {
-	return mList.size();
+	return mVisibleItems.size();
 }
 
 void GUIListBox::RenderItem(size_t itemindex, int yPos, bool selected)
 {
 	// note: the "selected" parameter above is for the currently touched item
 	// don't confuse it with the more persistent "selected" flag per list item used below
-	ImageResource* icon = mList.at(itemindex).selected ? mIconSelected : mIconUnselected;
-	const std::string& text = mList.at(itemindex).displayName;
+	ListItem& item = mListItems[mVisibleItems[itemindex]];
+	ImageResource* icon = item.selected ? mIconSelected : mIconUnselected;
+	const std::string& text = item.displayName;
 
 	RenderStdItem(yPos, selected, icon, text.c_str());
 }
 
 void GUIListBox::NotifySelect(size_t item_selected)
 {
-	for (size_t i = 0; i < mList.size(); i++) {
-		mList.at(i).selected = 0;
+	if (!isCheckList) {
+		// deselect all items, even invisible ones
+		for (size_t i = 0; i < mListItems.size(); i++) {
+			mListItems[i].selected = 0;
+		}
 	}
-	if (item_selected < mList.size()) {
-		mList.at(item_selected).selected = 1;
-		string str = mList.at(item_selected).variableValue;
+
+	ListItem& item = mListItems[mVisibleItems[item_selected]];
+
+	if (isCheckList) {
+		int selected = 1 - item.selected;
+		item.selected = selected;
+		DataManager::SetValue(item.variableName, selected ? "1" : "0");
+	} else {
+		item.selected = 1;
+		string str = item.variableValue;	// [check] should this set currentValue instead?
 		DataManager::SetValue(mVariable, str);
 	}
+	if (item.action)
+		item.action->doActions();
 	mUpdate = 1;
 }

@@ -19,8 +19,8 @@
 
 extern "C" {
 #include "../twcommon.h"
-#include "../minuitwrp/minui.h"
 }
+#include "../minuitwrp/minui.h"
 
 #include "rapidxml.hpp"
 #include "objects.hpp"
@@ -34,7 +34,9 @@ GUIText::GUIText(xml_node<>* node)
 	mFontHeight = 0;
 	maxWidth = 0;
 	charSkip = 0;
+	scaleWidth = true;
 	isHighlighted = false;
+	mText = "";
 
 	if (!node)
 		return;
@@ -45,6 +47,8 @@ GUIText::GUIText(xml_node<>* node)
 
 	// Load the font, and possibly override the color
 	mFont = LoadAttrFont(FindNode(node, "font"), "resource");
+	if (!mFont)
+		return;
 	mColor = LoadAttrColor(FindNode(node, "font"), "color", mColor);
 	mHighlightColor = LoadAttrColor(FindNode(node, "font"), "highlightcolor", mColor);
 
@@ -53,6 +57,23 @@ GUIText::GUIText(xml_node<>* node)
 
 	xml_node<>* child = FindNode(node, "text");
 	if (child)  mText = child->value();
+
+	child = FindNode(node, "noscaling");
+	if (child) {
+		scaleWidth = false;
+	} else {
+		if (mPlacement == TOP_LEFT || mPlacement == BOTTOM_LEFT) {
+			maxWidth = gr_fb_width() - mRenderX;
+		} else if (mPlacement == TOP_RIGHT || mPlacement == BOTTOM_RIGHT) {
+			maxWidth = mRenderX;
+		} else if (mPlacement == CENTER || mPlacement == CENTER_X_ONLY) {
+			if (mRenderX < gr_fb_width() / 2) {
+				maxWidth = mRenderX * 2;
+			} else {
+				maxWidth = (gr_fb_width() - mRenderX) * 2;
+			}
+		}
+	}
 
 	// Simple way to check for static state
 	mLastValue = gui_parse_text(mText);
@@ -69,6 +90,8 @@ int GUIText::Render(void)
 	void* fontResource = NULL;
 	if (mFont)
 		fontResource = mFont->GetResource();
+	else
+		return -1;
 
 	mLastValue = gui_parse_text(mText);
 	string displayValue = mLastValue;
@@ -79,32 +102,15 @@ int GUIText::Render(void)
 	mVarChanged = 0;
 
 	int x = mRenderX, y = mRenderY;
-	int width = gr_measureEx(displayValue.c_str(), fontResource);
-
-	if (mPlacement != TOP_LEFT && mPlacement != BOTTOM_LEFT)
-	{
-		if (mPlacement == CENTER || mPlacement == CENTER_X_ONLY)
-			x -= (width / 2);
-		else
-			x -= width;
-	}
-	if (mPlacement != TOP_LEFT && mPlacement != TOP_RIGHT)
-	{
-		if (mPlacement == CENTER)
-			y -= (mFontHeight / 2);
-		else if (mPlacement == BOTTOM_LEFT || mPlacement == BOTTOM_RIGHT)
-			y -= mFontHeight;
-	}
+	int width = gr_ttf_measureEx(displayValue.c_str(), fontResource);
 
 	if (isHighlighted)
 		gr_color(mHighlightColor.red, mHighlightColor.green, mHighlightColor.blue, mHighlightColor.alpha);
 	else
 		gr_color(mColor.red, mColor.green, mColor.blue, mColor.alpha);
 
-	if (maxWidth)
-		gr_textExW(x, y, displayValue.c_str(), fontResource, maxWidth + x);
-	else
-		gr_textEx(x, y, displayValue.c_str(), fontResource);
+	gr_textEx_scaleW(mRenderX, mRenderY, displayValue.c_str(), fontResource, maxWidth, mPlacement, scaleWidth);
+
 	return 0;
 }
 
@@ -143,7 +149,7 @@ int GUIText::GetCurrentBounds(int& w, int& h)
 
 	h = mFontHeight;
 	mLastValue = gui_parse_text(mText);
-	w = gr_measureEx(mLastValue.c_str(), fontResource);
+	w = gr_ttf_measureEx(mLastValue.c_str(), fontResource);
 	return 0;
 }
 

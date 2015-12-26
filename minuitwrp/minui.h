@@ -17,14 +17,23 @@
 #ifndef _MINUI_H_
 #define _MINUI_H_
 
+#include "../gui/placement.h"
+#include <stdbool.h>
+
+struct GRSurface {
+    int width;
+    int height;
+    int row_bytes;
+    int pixel_bytes;
+    unsigned char* data;
+    __u32 format;
+};
+
 typedef void* gr_surface;
 typedef unsigned short gr_pixel;
 
 #define FONT_TYPE_TWRP 0
-
-#ifndef TW_DISABLE_TTF
 #define FONT_TYPE_TTF  1
-#endif
 
 int gr_init(void);
 void gr_exit(void);
@@ -35,7 +44,7 @@ int gr_screen_width(void);
 int gr_screen_height(void);
 gr_pixel *gr_fb_data(void);
 void gr_flip(void);
-int gr_fb_blank(int blank);
+void gr_fb_blank(bool blank);
 
 void gr_color(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 void gr_clip(int x, int y, int w, int h);
@@ -44,28 +53,18 @@ void gr_fill(int x, int y, int w, int h);
 void gr_line(int x0, int y0, int x1, int y1, int width);
 gr_surface gr_render_circle(int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 
-int gr_textEx(int x, int y, const char *s, void* font);
-int gr_textExW(int x, int y, const char *s, void* font, int max_width);
-int gr_textExWH(int x, int y, const char *s, void* pFont, int max_width, int max_height);
-static inline int gr_text(int x, int y, const char *s)     { return gr_textEx(x, y, s, NULL); }
-int gr_measureEx(const char *s, void* font);
-static inline int gr_measure(const char *s)                { return gr_measureEx(s, NULL); }
-int gr_maxExW(const char *s, void* font, int max_width);
+int gr_textEx_scaleW(int x, int y, const char *s, void* pFont, int max_width, int placement, int scale);
 
 int gr_getMaxFontHeight(void *font);
 
-void* gr_loadFont(const char* fontName);
-void gr_freeFont(void *font);
-
-#ifndef TW_DISABLE_TTF
 void *gr_ttf_loadFont(const char *filename, int size, int dpi);
+void *gr_ttf_scaleFont(void *font, int max_width, int measured_width);
 void gr_ttf_freeFont(void *font);
 int gr_ttf_textExWH(void *context, int x, int y, const char *s, void *pFont, int max_width, int max_height);
 int gr_ttf_measureEx(const char *s, void *font);
 int gr_ttf_maxExW(const char *s, void *font, int max_width);
 int gr_ttf_getMaxFontHeight(void *font);
 void gr_ttf_dump_stats(void);
-#endif
 
 void gr_blit(gr_surface source, int sx, int sy, int w, int h, int dx, int dy);
 unsigned int gr_get_width(gr_surface surface);
@@ -106,11 +105,6 @@ int ev_has_mouse(void);
 int res_create_surface(const char* name, gr_surface* pSurface);
 void res_free_surface(gr_surface surface);
 int res_scale_surface(gr_surface source, gr_surface* destination, float scale_w, float scale_h);
-
-// Needed for AOSP:
-int ev_wait(int timeout);
-void ev_dispatch(void);
-int ev_get_input(int fd, short revents, struct input_event *ev);
 
 int vibrate(int timeout_ms);
 

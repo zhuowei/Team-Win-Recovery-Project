@@ -1,3 +1,21 @@
+/*
+	Copyright 2015 bigbiff/Dees_Troy TeamWin
+	This file is part of TWRP/TeamWin Recovery Project.
+
+	TWRP is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 3 of the License, or
+	(at your option) any later version.
+
+	TWRP is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with TWRP.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 // console.cpp - GUIConsole object
 
 #include <stdarg.h>
@@ -19,15 +37,21 @@
 
 extern "C" {
 #include "../twcommon.h"
-#include "../minuitwrp/minui.h"
 }
+#include "../minuitwrp/minui.h"
 
 #include "rapidxml.hpp"
 #include "objects.hpp"
+#include "gui.hpp"
+#include "twmsg.h"
 
+#define GUI_CONSOLE_BUFFER_SIZE 512
 
-static std::vector<std::string> gConsole;
-static std::vector<std::string> gConsoleColor;
+size_t last_message_count = 0;
+std::vector<Message> gMessages;
+
+std::vector<std::string> gConsole;
+std::vector<std::string> gConsoleColor;
 static FILE* ors_file;
 
 extern "C" void __gui_print(const char *color, char *buf)
@@ -58,22 +82,22 @@ extern "C" void __gui_print(const char *color, char *buf)
 		gConsole.push_back(start);
 		gConsoleColor.push_back(color);
 	}
-	if (ors_file) {
-		fprintf(ors_file, "%s\n", buf);
-		fflush(ors_file);
-	}
 }
 
 extern "C" void gui_print(const char *fmt, ...)
 {
-	char buf[512];		// We're going to limit a single request to 512 bytes
+	char buf[GUI_CONSOLE_BUFFER_SIZE];		// We're going to limit a single request to 512 bytes
 
 	va_list ap;
 	va_start(ap, fmt);
-	vsnprintf(buf, 512, fmt, ap);
+	vsnprintf(buf, GUI_CONSOLE_BUFFER_SIZE, fmt, ap);
 	va_end(ap);
 
 	fputs(buf, stdout);
+	if (ors_file) {
+		fprintf(ors_file, "%s", buf);
+		fflush(ors_file);
+	}
 
 	__gui_print("normal", buf);
 	return;
@@ -81,14 +105,18 @@ extern "C" void gui_print(const char *fmt, ...)
 
 extern "C" void gui_print_color(const char *color, const char *fmt, ...)
 {
-	char buf[512];		// We're going to limit a single request to 512 bytes
+	char buf[GUI_CONSOLE_BUFFER_SIZE];		// We're going to limit a single request to 512 bytes
 
 	va_list ap;
 	va_start(ap, fmt);
-	vsnprintf(buf, 512, fmt, ap);
+	vsnprintf(buf, GUI_CONSOLE_BUFFER_SIZE, fmt, ap);
 	va_end(ap);
 
 	fputs(buf, stdout);
+	if (ors_file) {
+		fprintf(ors_file, "%s", buf);
+		fflush(ors_file);
+	}
 
 	__gui_print(color, buf);
 	return;
@@ -97,6 +125,70 @@ extern "C" void gui_print_color(const char *color, const char *fmt, ...)
 extern "C" void gui_set_FILE(FILE* f)
 {
 	ors_file = f;
+}
+
+void gui_msg(const char* text)
+{
+	if (text) {
+		Message msg = Msg(text);
+		gui_msg(msg);
+	}
+}
+
+void gui_warn(const char* text)
+{
+	if (text) {
+		Message msg = Msg(msg::kWarning, text);
+		gui_msg(msg);
+	}
+}
+
+void gui_err(const char* text)
+{
+	if (text) {
+		Message msg = Msg(msg::kError, text);
+		gui_msg(msg);
+	}
+}
+
+void gui_highlight(const char* text)
+{
+	if (text) {
+		Message msg = Msg(msg::kHighlight, text);
+		gui_msg(msg);
+	}
+}
+
+void gui_msg(Message msg)
+{
+	std::string output = msg;
+	output += "\n";
+	fputs(output.c_str(), stdout);
+	if (ors_file) {
+		fprintf(ors_file, "%s", output.c_str());
+		fflush(ors_file);
+	}
+	gMessages.push_back(msg);
+}
+
+void GUIConsole::Translate_Now() {
+	size_t message_count = gMessages.size();
+	if (message_count <= last_message_count)
+		return;
+
+	for (size_t m = last_message_count; m < message_count; m++) {
+		std::string message = gMessages[m];
+		std::string color = "normal";
+		if (gMessages[m].GetKind() == msg::kError)
+			color = "error";
+		else if (gMessages[m].GetKind() == msg::kHighlight)
+			color = "highlight";
+		else if (gMessages[m].GetKind() == msg::kWarning)
+			color = "warning";
+		gConsole.push_back(message);
+		gConsoleColor.push_back(color);
+	}
+	last_message_count = message_count;
 }
 
 GUIConsole::GUIConsole(xml_node<>* node) : GUIScrollList(node)
@@ -158,44 +250,15 @@ int GUIConsole::RenderSlideout(void)
 	return 0;
 }
 
-bool GUIConsole::AddLines()
-{
-	if (mLastCount == gConsole.size())
-		return false; // nothing to add
-
-	size_t prevCount = mLastCount;
-	mLastCount = gConsole.size();
-
-	// Due to word wrap, figure out what / how the newly added text needs to be added to the render vector that is word wrapped
-	// Note, that multiple consoles on different GUI pages may be different widths or use different fonts, so the word wrapping
-	// may different in different console windows
-	for (size_t i = prevCount; i < mLastCount; i++) {
-		string curr_line = gConsole[i];
-		string curr_color = gConsoleColor[i];
-		for(;;) {
-			size_t line_char_width = gr_maxExW(curr_line.c_str(), mFont->GetResource(), mRenderW);
-			if (line_char_width < curr_line.size()) {
-				rConsole.push_back(curr_line.substr(0, line_char_width));
-				rConsoleColor.push_back(curr_color);
-				curr_line = curr_line.substr(line_char_width);
-			} else {
-				rConsole.push_back(curr_line);
-				rConsoleColor.push_back(curr_color);
-				break;
-			}
-		}
-	}
-	return true;
-}
-
 int GUIConsole::RenderConsole(void)
 {
-	AddLines();
+	Translate_Now();
+	AddLines(&gConsole, &gConsoleColor, &mLastCount, &rConsole, &rConsoleColor);
 	GUIScrollList::Render();
 
 	// if last line is fully visible, keep tracking the last line when new lines are added
 	int bottom_offset = GetDisplayRemainder() - actualItemHeight;
-	bool isAtBottom = firstDisplayedItem == GetItemCount() - GetDisplayItemCount() - (bottom_offset != 0) && y_offset == bottom_offset;
+	bool isAtBottom = firstDisplayedItem == (int)GetItemCount() - GetDisplayItemCount() - (bottom_offset != 0) && y_offset == bottom_offset;
 	if (isAtBottom)
 		scrollToEnd = true;
 #if 0
@@ -241,7 +304,7 @@ int GUIConsole::Update(void)
 		scrollToEnd = true;
 	}
 
-	if (AddLines()) {
+	if (AddLines(&gConsole, &gConsoleColor, &mLastCount, &rConsole, &rConsoleColor)) {
 		// someone added new text
 		// at least the scrollbar must be updated, even if the new lines are currently not visible
 		mUpdate = 1;
@@ -304,7 +367,7 @@ size_t GUIConsole::GetItemCount()
 	return rConsole.size();
 }
 
-void GUIConsole::RenderItem(size_t itemindex, int yPos, bool selected)
+void GUIConsole::RenderItem(size_t itemindex, int yPos, bool selected __unused)
 {
 	// Set the color for the font
 	if (rConsoleColor[itemindex] == "normal") {
@@ -319,10 +382,10 @@ void GUIConsole::RenderItem(size_t itemindex, int yPos, bool selected)
 
 	// render text
 	const char* text = rConsole[itemindex].c_str();
-	gr_textEx(mRenderX, yPos, text, mFont->GetResource());
+	gr_textEx_scaleW(mRenderX, yPos, text, mFont->GetResource(), mRenderW, TOP_LEFT, 0);
 }
 
-void GUIConsole::NotifySelect(size_t item_selected)
+void GUIConsole::NotifySelect(size_t item_selected __unused)
 {
 	// do nothing - console ignores selections
 }

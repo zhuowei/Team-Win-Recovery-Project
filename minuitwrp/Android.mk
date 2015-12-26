@@ -2,12 +2,20 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
-LOCAL_SRC_FILES := events.c resources.c graphics_overlay.c graphics_utils.c
+LOCAL_SRC_FILES := \
+    graphics.cpp \
+    graphics_fbdev.cpp \
+    resources.cpp \
+    graphics_overlay.cpp \
+    truetype.cpp \
+    graphics_utils.cpp \
+    events.cpp
 
 ifneq ($(TW_BOARD_CUSTOM_GRAPHICS),)
-    LOCAL_SRC_FILES += $(TW_BOARD_CUSTOM_GRAPHICS)
-else
-    LOCAL_SRC_FILES += graphics.c
+    $(warning ****************************************************************************)
+    $(warning * TW_BOARD_CUSTOM_GRAPHICS support has been deprecated in TWRP.            *)
+    $(warning ****************************************************************************)
+    $(error stopping)
 endif
 
 ifeq ($(TW_TARGET_USES_QCOM_BSP), true)
@@ -17,24 +25,39 @@ ifeq ($(TW_TARGET_USES_QCOM_BSP), true)
     LOCAL_C_INCLUDES += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
   else
     ifeq ($(TARGET_CUSTOM_KERNEL_HEADERS),)
-      LOCAL_C_INCLUDES += $(commands_recovery_local_path)/minuitwrp/include
+      LOCAL_C_INCLUDES += $(commands_recovery_local_path)/minui/include
     else
       LOCAL_C_INCLUDES += $(TARGET_CUSTOM_KERNEL_HEADERS)
     endif
   endif
 else
-  LOCAL_C_INCLUDES += $(commands_recovery_local_path)/minuitwrp/include
+  LOCAL_C_INCLUDES += $(commands_recovery_local_path)/minui/include
+  # The header files required for adf graphics can cause compile errors
+  # with adf graphics.
+  ifneq ($(wildcard system/core/adf/Android.mk),)
+    LOCAL_CFLAGS += -DHAS_ADF
+    LOCAL_SRC_FILES += graphics_adf.cpp
+    LOCAL_WHOLE_STATIC_LIBRARIES += libadf
+  endif
 endif
 
 ifeq ($(TW_NEW_ION_HEAP), true)
   LOCAL_CFLAGS += -DNEW_ION_HEAP
 endif
 
+ifneq ($(wildcard external/libdrm/Android.mk),)
+  LOCAL_CFLAGS += -DHAS_DRM
+  LOCAL_SRC_FILES += graphics_drm.cpp
+  LOCAL_WHOLE_STATIC_LIBRARIES += libdrm
+endif
+
 LOCAL_C_INCLUDES += \
     external/libpng \
     external/zlib \
     system/core/include \
-    external/jpeg
+    external/jpeg \
+    external/freetype/include \
+    external/libcxx/include
 
 ifeq ($(RECOVERY_TOUCHSCREEN_SWAP_XY), true)
 LOCAL_CFLAGS += -DRECOVERY_TOUCHSCREEN_SWAP_XY
@@ -62,6 +85,9 @@ ifeq ($(TWRP_EVENT_LOGGING), true)
 LOCAL_CFLAGS += -D_EVENT_LOGGING
 endif
 
+ifeq ($(subst ",,$(TARGET_RECOVERY_PIXEL_FORMAT)),RGBA_8888)
+  LOCAL_CFLAGS += -DRECOVERY_RGBA
+endif
 ifeq ($(subst ",,$(TARGET_RECOVERY_PIXEL_FORMAT)),RGBX_8888)
   LOCAL_CFLAGS += -DRECOVERY_RGBX
 endif
@@ -70,6 +96,12 @@ ifeq ($(subst ",,$(TARGET_RECOVERY_PIXEL_FORMAT)),BGRA_8888)
 endif
 ifeq ($(subst ",,$(TARGET_RECOVERY_PIXEL_FORMAT)),RGB_565)
   LOCAL_CFLAGS += -DRECOVERY_RGB_565
+endif
+
+ifneq ($(TARGET_RECOVERY_OVERSCAN_PERCENT),)
+  LOCAL_CFLAGS += -DOVERSCAN_PERCENT=$(TARGET_RECOVERY_OVERSCAN_PERCENT)
+else
+  LOCAL_CFLAGS += -DOVERSCAN_PERCENT=0
 endif
 
 ifeq ($(TARGET_RECOVERY_PIXEL_FORMAT),"RGBX_8888")
@@ -97,43 +129,12 @@ ifeq ($(TW_IGNORE_MT_POSITION_0), true)
 LOCAL_CFLAGS += -DTW_IGNORE_MT_POSITION_0
 endif
 
-ifneq ($(TW_INPUT_BLACKLIST),)
-  LOCAL_CFLAGS += -DTW_INPUT_BLACKLIST=$(TW_INPUT_BLACKLIST)
+ifeq ($(TW_IGNORE_ABS_MT_TRACKING_ID), true)
+LOCAL_CFLAGS += -DTW_IGNORE_ABS_MT_TRACKING_ID
 endif
 
-ifneq ($(BOARD_USE_CUSTOM_RECOVERY_FONT),)
-  LOCAL_CFLAGS += -DBOARD_USE_CUSTOM_RECOVERY_FONT=$(BOARD_USE_CUSTOM_RECOVERY_FONT)
-else
-    ifeq ($(TW_THEME),)
-        # This converts the old DEVICE_RESOLUTION flag to the new TW_THEME flag
-        PORTRAIT_MDPI := 320x480 480x800 480x854 540x960
-        PORTRAIT_HDPI := 720x1280 800x1280 1080x1920 1200x1920 1440x2560 1600x2560
-        WATCH_MDPI := 240x240 280x280 320x320
-        LANDSCAPE_MDPI := 800x480 1024x600 1024x768
-        LANDSCAPE_HDPI := 1280x800 1920x1200 2560x1600
-        ifneq ($(filter $(DEVICE_RESOLUTION), $(PORTRAIT_MDPI)),)
-            TW_THEME := portrait_mdpi
-        else ifneq ($(filter $(DEVICE_RESOLUTION), $(PORTRAIT_HDPI)),)
-            TW_THEME := portrait_hdpi
-        else ifneq ($(filter $(DEVICE_RESOLUTION), $(WATCH_MDPI)),)
-            TW_THEME := watch_mdpi
-        else ifneq ($(filter $(DEVICE_RESOLUTION), $(LANDSCAPE_MDPI)),)
-            TW_THEME := landscape_mdpi
-        else ifneq ($(filter $(DEVICE_RESOLUTION), $(LANDSCAPE_HDPI)),)
-            TW_THEME := landscape_hdpi
-        endif
-    endif
-    ifeq ($(TW_THEME), portrait_mdpi)
-        LOCAL_CFLAGS += -DBOARD_USE_CUSTOM_RECOVERY_FONT=\"roboto_10x18.h\"
-    else ifeq ($(TW_THEME), portrait_hdpi)
-        LOCAL_CFLAGS += -DBOARD_USE_CUSTOM_RECOVERY_FONT=\"roboto_15x24.h\"
-    else ifeq ($(TW_THEME), watch_mdpi)
-        LOCAL_CFLAGS += -DBOARD_USE_CUSTOM_RECOVERY_FONT=\"font_7x16.h\"
-    else ifeq ($(TW_THEME), landscape_mdpi)
-        LOCAL_CFLAGS += -DBOARD_USE_CUSTOM_RECOVERY_FONT=\"roboto_10x18.h\"
-    else ifeq ($(TW_THEME), landscape_hdpi)
-        LOCAL_CFLAGS += -DBOARD_USE_CUSTOM_RECOVERY_FONT=\"roboto_15x24.h\"
-    endif
+ifneq ($(TW_INPUT_BLACKLIST),)
+  LOCAL_CFLAGS += -DTW_INPUT_BLACKLIST=$(TW_INPUT_BLACKLIST)
 endif
 
 ifneq ($(TW_WHITELIST_INPUT),)
@@ -141,24 +142,17 @@ ifneq ($(TW_WHITELIST_INPUT),)
 endif
 
 ifeq ($(TW_DISABLE_TTF), true)
-    LOCAL_CFLAGS += -DTW_DISABLE_TTF
-else
-    LOCAL_SHARED_LIBRARIES += libft2
-    LOCAL_C_INCLUDES += external/freetype/include
-    LOCAL_SRC_FILES += truetype.c
+    $(warning ****************************************************************************)
+    $(warning * TW_DISABLE_TTF support has been deprecated in TWRP.                      *)
+    $(warning ****************************************************************************)
+    $(error stopping)
 endif
+
+LOCAL_CLANG := true
 
 LOCAL_CFLAGS += -DTWRES=\"$(TWRES_PATH)\"
-
-ifneq ($(LANDSCAPE_RESOLUTION),)
-  LOCAL_CFLAGS += -DTW_HAS_LANDSCAPE
-endif
-ifneq ($(TW_THEME_LANDSCAPE),)
-  LOCAL_CFLAGS += -DTW_HAS_LANDSCAPE
-endif
-
-LOCAL_SHARED_LIBRARIES += libz libc libcutils libjpeg libpng
-LOCAL_STATIC_LIBRARIES += libpixelflinger_static
+LOCAL_SHARED_LIBRARIES += libft2 libz libc libcutils libjpeg libpng libutils
+LOCAL_STATIC_LIBRARIES += libpixelflinger_twrp
 LOCAL_MODULE_TAGS := eng
 LOCAL_MODULE := libminuitwrp
 

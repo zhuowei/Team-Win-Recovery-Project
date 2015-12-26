@@ -15,9 +15,9 @@
 	</include>
 
 	<resources>
-		<resource name="font" type="font" filename="RobotoCondensed-Regular.ttf" size="20" fallback="Roboto-Regular-20" />
-		<resource name="mediumfont" type="font" filename="RobotoCondensed-Regular.ttf" size="20" fallback="Roboto-Regular-20" />
-		<resource name="filelist" type="font" filename="RobotoCondensed-Regular.ttf" size="20" fallback="Roboto-Regular-20" />
+		<resource name="font" type="font" filename="RobotoCondensed-Regular.ttf" size="20" />
+		<resource name="mediumfont" type="font" filename="RobotoCondensed-Regular.ttf" size="20" />
+		<resource name="filelist" type="font" filename="RobotoCondensed-Regular.ttf" size="20" />
 		<resource name="fixed" type="font" filename="DroidSansMono.ttf" size="16" />
 		<resource name="twrplogo" type="image" filename="twrplogo" retainaspect="1" />
 		<resource name="main_button" type="image" filename="menu-button" />
@@ -239,7 +239,7 @@
 
 	<templates>
 		<template name="header">
-			<background color="%backgroundcolor%" />
+			<background color="#000000FF" />
 
 			<object type="fill" color="%button_fill_color%">
 				<placement x="0" y="0" w="480" h="98" />
@@ -290,7 +290,7 @@
 				<conditions>
 					<condition var1="tw_no_cpu_temp" var2="0" />
 				</conditions>
-				<text>CPU: %tw_cpu_temp%° C</text>
+				<text>CPU: %tw_cpu_temp% &#xB0;C</text>
 			</object>
 
 			<object type="text" color="%text_fail_color%">

@@ -997,7 +997,7 @@
 			</object>
 
 			<object type="button">
-				<placement x="%col3_x%" y="%row10_text_y%" />
+				<placement x="%col3_x%" y="%row10_text_y%" textplacement="6" />
 				<font resource="font" color="%text_color%" />
 				<condition var1="tw_mount_system_ro" op="=" var2="0" />
 				<text>Only mount system read-only</text>
@@ -1006,7 +1006,7 @@
 			</object>
 
 			<object type="button">
-				<placement x="%col3_x%" y="%row10_text_y%" />
+				<placement x="%col3_x%" y="%row10_text_y%" textplacement="6" />
 				<font resource="font" color="%text_color%" />
 				<condition var1="tw_mount_system_ro" op="!=" var2="0" />
 				<text>Only mount system read-only</text>
@@ -2495,7 +2495,7 @@
 			</object>
 
 			<object type="button">
-				<placement x="%slidervalue_x%" y="%row3_text_y%" />
+				<placement x="%slidervalue_x%" y="%row3_text_y%" textplacement="6" />
 				<condition var1="tw_screen_timeout_secs" op="=" var2="0" />
 				<condition var1="tw_no_screen_timeout" op="!=" var2="1" />
 				<text>Enable screen timeout.</text>
@@ -2504,7 +2504,7 @@
 			</object>
 
 			<object type="button">
-				<placement x="%slidervalue_x%" y="%row3_text_y%" />
+				<placement x="%slidervalue_x%" y="%row3_text_y%" textplacement="6" />
 				<condition var1="tw_screen_timeout_secs" op="!=" var2="0" />
 				<condition var1="tw_no_screen_timeout" op="!=" var2="1" />
 				<text>Enable screen timeout.</text>
@@ -3743,7 +3743,7 @@
 
 			<object type="text">
 				<placement x="%center_x%" y="%row1_text_y%" placement="5" />
-				<text>TWRP has detected an unmodified system partition.</text>
+				<text>Keep System Read Only?</text>
 			</object>
 
 			<object type="text">
